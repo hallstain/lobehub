@@ -68,10 +68,12 @@ export class ComfyUIClientService {
       // Setup base URL
       this.baseURL =
         options.baseURL || process.env.COMFYUI_DEFAULT_URL || COMFYUI_DEFAULTS.BASE_URL;
+      const wsTimeout = Number(process.env.COMFYUI_WS_TIMEOUT) || COMFYUI_DEFAULTS.WS_TIMEOUT;
 
       // Initialize client with credentials from AuthService
       this.client = new ComfyApi(this.baseURL, undefined, {
         credentials: this.authService.getCredentials(),
+        wsTimeout,
       });
       this.client.init();
 

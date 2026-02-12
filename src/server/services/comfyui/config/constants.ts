@@ -10,6 +10,7 @@
 export const COMFYUI_DEFAULTS = {
   BASE_URL: 'http://localhost:8000',
   CONNECTION_TIMEOUT: 30_000,
+  WS_TIMEOUT: 10_000,
   MAX_RETRIES: 3,
 } as const;
 
