@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ['bun', 'nodejs_24', 'pnpm']
+
+[phases.setup.env]
+NIXPKGS_ALLOW_UNFREE = "1"
+
+[phases.install]
+cmds = ['pnpm install']
+
+[phases.build]
+cmds = ['NODE_OPTIONS="--max-old-space-size=8192" pnpm run build']
+
+[start]
+cmd = "pnpm start"
