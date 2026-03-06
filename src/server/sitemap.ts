@@ -159,59 +159,81 @@ export class Sitemap {
   }
 
   async getIndex(): Promise<string> {
-    const staticSitemaps = this.sitemapIndexs.map((item) =>
-      this._generateSitemapLink(
-        getCanonicalUrl(SITEMAP_BASE_URL, isDev ? item.id : `${item.id}.xml`),
-      ),
-    );
-
-    // Get page counts for types that need pagination
-    const [pluginPages, assistantPages, modelPages] = await Promise.all([
-      this.getPluginPageCount(),
-      this.getAssistantPageCount(),
-      this.getModelPageCount(),
-    ]);
-
-    // Generate paginated sitemap links
-    const paginatedSitemaps = [
-      ...Array.from({ length: pluginPages }, (_, i) =>
+    try {
+      const staticSitemaps = this.sitemapIndexs.map((item) =>
         this._generateSitemapLink(
-          getCanonicalUrl(SITEMAP_BASE_URL, isDev ? `plugins-${i + 1}` : `plugins-${i + 1}.xml`),
+          getCanonicalUrl(SITEMAP_BASE_URL, isDev ? item.id : `${item.id}.xml`),
         ),
-      ),
-      ...Array.from({ length: assistantPages }, (_, i) =>
-        this._generateSitemapLink(
-          getCanonicalUrl(
-            SITEMAP_BASE_URL,
-            isDev ? `assistants-${i + 1}` : `assistants-${i + 1}.xml`,
+      );
+
+      // Get page counts for types that need pagination
+      const [pluginPages, assistantPages, modelPages] = await Promise.all([
+        this.getPluginPageCount().catch(() => 0),
+        this.getAssistantPageCount().catch(() => 0),
+        this.getModelPageCount().catch(() => 0),
+      ]);
+
+      // Generate paginated sitemap links
+      const paginatedSitemaps = [
+        ...Array.from({ length: pluginPages }, (_, i) =>
+          this._generateSitemapLink(
+            getCanonicalUrl(SITEMAP_BASE_URL, isDev ? `plugins-${i + 1}` : `plugins-${i + 1}.xml`),
           ),
         ),
-      ),
-      ...Array.from({ length: modelPages }, (_, i) =>
-        this._generateSitemapLink(
-          getCanonicalUrl(SITEMAP_BASE_URL, isDev ? `models-${i + 1}` : `models-${i + 1}.xml`),
+        ...Array.from({ length: assistantPages }, (_, i) =>
+          this._generateSitemapLink(
+            getCanonicalUrl(
+              SITEMAP_BASE_URL,
+              isDev ? `assistants-${i + 1}` : `assistants-${i + 1}.xml`,
+            ),
+          ),
         ),
-      ),
-    ];
+        ...Array.from({ length: modelPages }, (_, i) =>
+          this._generateSitemapLink(
+            getCanonicalUrl(SITEMAP_BASE_URL, isDev ? `models-${i + 1}` : `models-${i + 1}.xml`),
+          ),
+        ),
+      ];
 
-    return [
-      '<?xml version="1.0" encoding="UTF-8"?>',
-      '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
-      ...staticSitemaps,
-      ...paginatedSitemaps,
-      '</sitemapindex>',
-    ].join('\n');
+      return [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+        ...staticSitemaps,
+        ...paginatedSitemaps,
+        '</sitemapindex>',
+      ].join('\n');
+    } catch (error) {
+      console.error('Error generating sitemap index:', error);
+      // Return a minimal valid sitemap index on error
+      return [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+        '</sitemapindex>',
+      ].join('\n');
+    }
   }
 
   async getAssistants(page?: number): Promise<MetadataRoute.Sitemap> {
-    const list = await this.discoverService.getAssistantIdentifiers();
+    try {
+      const list = await this.discoverService.getAssistantIdentifiers();
 
-    if (page !== undefined) {
-      const startIndex = (page - 1) * ITEMS_PER_PAGE;
-      const endIndex = startIndex + ITEMS_PER_PAGE;
-      const pageAssistants = list.slice(startIndex, endIndex);
+      if (page !== undefined) {
+        const startIndex = (page - 1) * ITEMS_PER_PAGE;
+        const endIndex = startIndex + ITEMS_PER_PAGE;
+        const pageAssistants = list.slice(startIndex, endIndex);
 
-      const sitmap = pageAssistants
+        const sitmap = pageAssistants
+          .filter((item) => item.identifier) // Filter out items with empty identifiers
+          .map((item) =>
+            this._genSitemap(urlJoin('/community/agent', item.identifier), {
+              lastModified: item?.lastModified || LAST_MODIFIED,
+            }),
+          );
+        return flatten(sitmap);
+      }
+
+      // If page number is not specified, return all (backward compatibility)
+      const sitmap = list
         .filter((item) => item.identifier) // Filter out items with empty identifiers
         .map((item) =>
           this._genSitemap(urlJoin('/community/agent', item.identifier), {
@@ -219,28 +241,33 @@ export class Sitemap {
           }),
         );
       return flatten(sitmap);
+    } catch (error) {
+      console.error('Error generating assistants sitemap:', error);
+      return [];
     }
-
-    // If page number is not specified, return all (backward compatibility)
-    const sitmap = list
-      .filter((item) => item.identifier) // Filter out items with empty identifiers
-      .map((item) =>
-        this._genSitemap(urlJoin('/community/agent', item.identifier), {
-          lastModified: item?.lastModified || LAST_MODIFIED,
-        }),
-      );
-    return flatten(sitmap);
   }
 
   async getPlugins(page?: number): Promise<MetadataRoute.Sitemap> {
-    const list = await this.discoverService.getPluginIdentifiers();
+    try {
+      const list = await this.discoverService.getPluginIdentifiers();
 
-    if (page !== undefined) {
-      const startIndex = (page - 1) * ITEMS_PER_PAGE;
-      const endIndex = startIndex + ITEMS_PER_PAGE;
-      const pagePlugins = list.slice(startIndex, endIndex);
+      if (page !== undefined) {
+        const startIndex = (page - 1) * ITEMS_PER_PAGE;
+        const endIndex = startIndex + ITEMS_PER_PAGE;
+        const pagePlugins = list.slice(startIndex, endIndex);
 
-      const sitmap = pagePlugins
+        const sitmap = pagePlugins
+          .filter((item) => item.identifier) // Filter out items with empty identifiers
+          .map((item) =>
+            this._genSitemap(urlJoin('/community/plugin', item.identifier), {
+              lastModified: item?.lastModified || LAST_MODIFIED,
+            }),
+          );
+        return flatten(sitmap);
+      }
+
+      // If page number is not specified, return all (backward compatibility)
+      const sitmap = list
         .filter((item) => item.identifier) // Filter out items with empty identifiers
         .map((item) =>
           this._genSitemap(urlJoin('/community/plugin', item.identifier), {
@@ -248,28 +275,33 @@ export class Sitemap {
           }),
         );
       return flatten(sitmap);
+    } catch (error) {
+      console.error('Error generating plugins sitemap:', error);
+      return [];
     }
-
-    // If page number is not specified, return all (backward compatibility)
-    const sitmap = list
-      .filter((item) => item.identifier) // Filter out items with empty identifiers
-      .map((item) =>
-        this._genSitemap(urlJoin('/community/plugin', item.identifier), {
-          lastModified: item?.lastModified || LAST_MODIFIED,
-        }),
-      );
-    return flatten(sitmap);
   }
 
   async getModels(page?: number): Promise<MetadataRoute.Sitemap> {
-    const list = await this.discoverService.getModelIdentifiers();
+    try {
+      const list = await this.discoverService.getModelIdentifiers();
 
-    if (page !== undefined) {
-      const startIndex = (page - 1) * ITEMS_PER_PAGE;
-      const endIndex = startIndex + ITEMS_PER_PAGE;
-      const pageModels = list.slice(startIndex, endIndex);
+      if (page !== undefined) {
+        const startIndex = (page - 1) * ITEMS_PER_PAGE;
+        const endIndex = startIndex + ITEMS_PER_PAGE;
+        const pageModels = list.slice(startIndex, endIndex);
 
-      const sitmap = pageModels
+        const sitmap = pageModels
+          .filter((item) => item.identifier) // Filter out items with empty identifiers
+          .map((item) =>
+            this._genSitemap(urlJoin('/community/model', item.identifier), {
+              lastModified: item?.lastModified || LAST_MODIFIED,
+            }),
+          );
+        return flatten(sitmap);
+      }
+
+      // If page number is not specified, return all (backward compatibility)
+      const sitmap = list
         .filter((item) => item.identifier) // Filter out items with empty identifiers
         .map((item) =>
           this._genSitemap(urlJoin('/community/model', item.identifier), {
@@ -277,47 +309,50 @@ export class Sitemap {
           }),
         );
       return flatten(sitmap);
+    } catch (error) {
+      console.error('Error generating models sitemap:', error);
+      return [];
     }
-
-    // If page number is not specified, return all (backward compatibility)
-    const sitmap = list
-      .filter((item) => item.identifier) // Filter out items with empty identifiers
-      .map((item) =>
-        this._genSitemap(urlJoin('/community/model', item.identifier), {
-          lastModified: item?.lastModified || LAST_MODIFIED,
-        }),
-      );
-    return flatten(sitmap);
   }
 
   async getProviders(): Promise<MetadataRoute.Sitemap> {
-    const list = await this.discoverService.getProviderIdentifiers();
-    const sitmap = list
-      .filter((item) => item.identifier) // Filter out items with empty identifiers
-      .map((item) =>
-        this._genSitemap(urlJoin('/community/provider', item.identifier), {
-          lastModified: item?.lastModified || LAST_MODIFIED,
-        }),
-      );
-    return flatten(sitmap);
+    try {
+      const list = await this.discoverService.getProviderIdentifiers();
+      const sitmap = list
+        .filter((item) => item.identifier) // Filter out items with empty identifiers
+        .map((item) =>
+          this._genSitemap(urlJoin('/community/provider', item.identifier), {
+            lastModified: item?.lastModified || LAST_MODIFIED,
+          }),
+        );
+      return flatten(sitmap);
+    } catch (error) {
+      console.error('Error generating providers sitemap:', error);
+      return [];
+    }
   }
 
   async getPage(): Promise<MetadataRoute.Sitemap> {
-    const hideDocs = serverFeatureFlags().hideDocs;
-    return [
-      ...this._genSitemap('/', { noLocales: true }),
-      ...this._genSitemap('/agent', { noLocales: true }),
-      ...(!hideDocs ? this._genSitemap('/changelog', { noLocales: true }) : []),
-      /* ↓ cloud slot ↓ */
+    try {
+      const hideDocs = serverFeatureFlags().hideDocs;
+      return [
+        ...this._genSitemap('/', { noLocales: true }),
+        ...this._genSitemap('/agent', { noLocales: true }),
+        ...(!hideDocs ? this._genSitemap('/changelog', { noLocales: true }) : []),
+        /* ↓ cloud slot ↓ */
 
-      /* ↑ cloud slot ↑ */
-      ...this._genSitemap('/community', { changeFrequency: 'daily', priority: 0.7 }),
-      ...this._genSitemap('/community/agent', { changeFrequency: 'daily', priority: 0.7 }),
-      ...this._genSitemap('/community/mcp', { changeFrequency: 'daily', priority: 0.7 }),
-      ...this._genSitemap('/community/plugin', { changeFrequency: 'daily', priority: 0.7 }),
-      ...this._genSitemap('/community/model', { changeFrequency: 'daily', priority: 0.7 }),
-      ...this._genSitemap('/community/provider', { changeFrequency: 'daily', priority: 0.7 }),
-    ].filter(Boolean);
+        /* ↑ cloud slot ↑ */
+        ...this._genSitemap('/community', { changeFrequency: 'daily', priority: 0.7 }),
+        ...this._genSitemap('/community/agent', { changeFrequency: 'daily', priority: 0.7 }),
+        ...this._genSitemap('/community/mcp', { changeFrequency: 'daily', priority: 0.7 }),
+        ...this._genSitemap('/community/plugin', { changeFrequency: 'daily', priority: 0.7 }),
+        ...this._genSitemap('/community/model', { changeFrequency: 'daily', priority: 0.7 }),
+        ...this._genSitemap('/community/provider', { changeFrequency: 'daily', priority: 0.7 }),
+      ].filter(Boolean);
+    } catch (error) {
+      console.error('Error generating page sitemap:', error);
+      return [];
+    }
   }
   getRobots() {
     return [
