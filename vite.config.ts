@@ -53,7 +53,7 @@ function resolveWorkspacePackages(): Plugin {
         const pkgJson = JSON.parse(await fs.promises.readFile(pkgJsonPath, 'utf-8'));
 
         // Resolve the export
-        const exportPath = subPath || '.';
+        const exportPath = subPath ? `./${subPath}` : '.';
         const resolvedExport = pkgJson.exports?.[exportPath];
 
         if (resolvedExport) {
