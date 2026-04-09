@@ -26,10 +26,24 @@ export const store: CreateStore = (publicState) => (set, get) => ({
   ...publicState,
 
   getJSONState: () => {
-    return get().editor?.getDocument('json') as Record<string, any> | undefined;
+    const editor = get().editor;
+    if (!editor) return undefined;
+    try {
+      return editor.getDocument('json') as Record<string, any> | undefined;
+    } catch {
+      // Editor exists but not fully initialized (root element not set)
+      return undefined;
+    }
   },
   getMarkdownContent: () => {
-    return String(get().editor?.getDocument('markdown') || '').trimEnd();
+    const editor = get().editor;
+    if (!editor) return '';
+    try {
+      return String(editor.getDocument('markdown') || '').trimEnd();
+    } catch {
+      // Editor exists but not fully initialized (root element not set)
+      return '';
+    }
   },
   handleSendButton: () => {
     const editor = get().editor;
@@ -63,7 +77,15 @@ export const store: CreateStore = (publicState) => (set, get) => ({
 
   setExpand: (expand) => {
     const editor = get().editor;
-    const _savedEditorState = editor?.getDocument('json') as Record<string, any> | undefined;
+    let _savedEditorState: Record<string, any> | undefined;
+    if (editor) {
+      try {
+        _savedEditorState = editor.getDocument('json') as Record<string, any> | undefined;
+      } catch {
+        // Editor exists but not fully initialized (root element not set)
+        _savedEditorState = undefined;
+      }
+    }
     set({ _savedEditorState, expand });
   },
 
