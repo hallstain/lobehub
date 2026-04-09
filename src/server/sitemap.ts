@@ -333,26 +333,18 @@ export class Sitemap {
   }
 
   async getPage(): Promise<MetadataRoute.Sitemap> {
-    try {
-      const hideDocs = serverFeatureFlags().hideDocs;
-      return [
-        ...this._genSitemap('/', { noLocales: true }),
-        ...this._genSitemap('/agent', { noLocales: true }),
-        ...(!hideDocs ? this._genSitemap('/changelog', { noLocales: true }) : []),
-        /* ↓ cloud slot ↓ */
-
-        /* ↑ cloud slot ↑ */
-        ...this._genSitemap('/community', { changeFrequency: 'daily', priority: 0.7 }),
-        ...this._genSitemap('/community/agent', { changeFrequency: 'daily', priority: 0.7 }),
-        ...this._genSitemap('/community/mcp', { changeFrequency: 'daily', priority: 0.7 }),
-        ...this._genSitemap('/community/plugin', { changeFrequency: 'daily', priority: 0.7 }),
-        ...this._genSitemap('/community/model', { changeFrequency: 'daily', priority: 0.7 }),
-        ...this._genSitemap('/community/provider', { changeFrequency: 'daily', priority: 0.7 }),
-      ].filter(Boolean);
-    } catch (error) {
-      console.error('Error generating page sitemap:', error);
-      return [];
-    }
+    const hideDocs = serverFeatureFlags().hideDocs;
+    return [
+      ...this._genSitemap('/', { noLocales: true }),
+      ...this._genSitemap('/agent', { noLocales: true }),
+      ...(!hideDocs ? this._genSitemap('/changelog', { noLocales: true }) : []),
+      ...this._genSitemap('/community', { changeFrequency: 'daily', priority: 0.7 }),
+      ...this._genSitemap('/community/agent', { changeFrequency: 'daily', priority: 0.7 }),
+      ...this._genSitemap('/community/mcp', { changeFrequency: 'daily', priority: 0.7 }),
+      ...this._genSitemap('/community/plugin', { changeFrequency: 'daily', priority: 0.7 }),
+      ...this._genSitemap('/community/model', { changeFrequency: 'daily', priority: 0.7 }),
+      ...this._genSitemap('/community/provider', { changeFrequency: 'daily', priority: 0.7 }),
+    ].filter(Boolean);
   }
   getRobots() {
     return [
