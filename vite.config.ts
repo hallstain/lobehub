@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 
-import type { PluginOption, ViteDevServer } from 'vite';
+import type { Plugin, PluginOption, ViteDevServer } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -21,8 +21,64 @@ Object.assign(process.env, loadEnv(mode, process.cwd(), ''));
 const isDev = process.env.NODE_ENV !== 'production';
 const platform = isMobile ? 'mobile' : 'web';
 
+/**
+ * Resolve workspace packages from packages/ directory
+ * Handles exports like @lobechat/builtin-tool-cron/executor
+ */
+function resolveWorkspacePackages(): Plugin {
+  const workspacePackages = new Map<string, string>();
+
+  return {
+    enforce: 'pre',
+    name: 'resolve-workspace-packages',
+    async resolveId(source, importer) {
+      if (!source.startsWith('@lobechat/')) return null;
+
+      // Check cache first
+      if (workspacePackages.has(source)) {
+        return workspacePackages.get(source)!;
+      }
+
+      // Parse the import path
+      // @lobechat/builtin-tool-cron/executor -> builtin-tool-cron, executor
+      const match = source.match(/^@lobechat\/([^/]+)(?:\/(.+))?$/);
+      if (!match) return null;
+
+      const [, pkgName, subPath] = match;
+      const pkgDir = resolve(__dirname, 'packages', pkgName);
+
+      try {
+        // Read package.json to get exports
+        const pkgJsonPath = resolve(pkgDir, 'package.json');
+        const pkgJson = JSON.parse(await fs.promises.readFile(pkgJsonPath, 'utf-8'));
+
+        // Resolve the export
+        const exportPath = subPath || '.';
+        const resolvedExport = pkgJson.exports?.[exportPath];
+
+        if (resolvedExport) {
+          const fullPath = resolve(pkgDir, resolvedExport);
+          workspacePackages.set(source, fullPath);
+          return fullPath;
+        }
+      } catch {
+        // Package not found, let default resolution handle it
+      }
+
+      return null;
+    },
+  };
+}
+
+import * as fs from 'node:fs';
+
 export default defineConfig({
   base: isDev ? '/' : process.env.VITE_CDN_BASE || '/_spa/',
+  resolve: {
+    alias: {
+      '@/': resolve(__dirname, './src/'),
+    },
+  },
   build: {
     outDir: isMobile ? 'dist/mobile' : 'dist/desktop',
     reportCompressedSize: false,
@@ -34,6 +90,7 @@ export default defineConfig({
   define: sharedRendererDefine({ isMobile, isElectron: false }),
   optimizeDeps: sharedOptimizeDeps,
   plugins: [
+    resolveWorkspacePackages(),
     vercelSkewProtection(),
     viteEnvRestartKeys(['APP_URL']),
     ...sharedRendererPlugins({ platform }),
