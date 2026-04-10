@@ -80,7 +80,11 @@ export const store: CreateStore = (publicState) => (set, get) => ({
     let _savedEditorState: Record<string, any> | undefined;
     if (editor) {
       try {
-        _savedEditorState = editor.getDocument('json') as Record<string, any> | undefined;
+        // Additional safety check: ensure editor is fully initialized
+        const lexicalEditor = editor.getLexicalEditor?.();
+        if (lexicalEditor) {
+          _savedEditorState = editor.getDocument('json') as Record<string, any> | undefined;
+        }
       } catch {
         // Editor exists but not fully initialized (root element not set)
         _savedEditorState = undefined;
