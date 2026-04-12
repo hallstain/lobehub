@@ -5,10 +5,13 @@ nixPkgs = ['bun', 'nodejs_24']
 NIXPKGS_ALLOW_UNFREE = "1"
 
 [phases.install]
-cmds = ['corepack enable && corepack prepare pnpm@10.20.0 --activate && pnpm install']
+# dependsOn forces re-run when setup changes; --no-frozen-lockfile handles version bumps in package.json
+cmds = ['corepack enable && corepack prepare pnpm@10.20.0 --activate && pnpm install --no-frozen-lockfile']
+dependsOn = ['setup']
 
 [phases.build]
 cmds = ['NODE_OPTIONS="--max-old-space-size=8192" pnpm run build']
 
 [start]
-cmd = "pnpm start"
+# Run DB migrations before starting the server
+cmd = "pnpm run db:migrate && pnpm start"
