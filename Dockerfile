@@ -29,6 +29,10 @@ RUN set -e && \
 ## Builder image, install all the dependencies and build the app
 FROM base AS builder
 
+# Cache buster: fetches latest commit SHA from GitHub on every build.
+# When a new commit is pushed, response changes → all subsequent layers are invalidated.
+ADD https://api.github.com/repos/hallstain/lobehub/commits/main /tmp/buildcache
+
 ARG USE_CN_MIRROR
 ARG NEXT_PUBLIC_BASE_PATH
 ARG NEXT_PUBLIC_SENTRY_DSN
