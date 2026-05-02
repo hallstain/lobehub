@@ -1,4 +1,6 @@
-import { resolve } from 'node:path';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import type { Plugin, PluginOption, ViteDevServer } from 'vite';
 import { defineConfig, loadEnv } from 'vite';
@@ -6,10 +8,10 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 import { viteEnvRestartKeys } from './plugins/vite/envRestartKeys';
 import {
+  createSharedRolldownOutput,
   sharedOptimizeDeps,
   sharedRendererDefine,
   sharedRendererPlugins,
-  sharedRollupOutput,
 } from './plugins/vite/sharedRendererConfig';
 import { vercelSkewProtection } from './plugins/vite/vercelSkewProtection';
 
@@ -31,33 +33,28 @@ function resolveWorkspacePackages(): Plugin {
   return {
     enforce: 'pre',
     name: 'resolve-workspace-packages',
-    async resolveId(source, importer) {
+    async resolveId(source) {
       if (!source.startsWith('@lobechat/')) return null;
 
-      // Check cache first
       if (workspacePackages.has(source)) {
         return workspacePackages.get(source)!;
       }
 
-      // Parse the import path
-      // @lobechat/builtin-tool-cron/executor -> builtin-tool-cron, executor
       const match = source.match(/^@lobechat\/([^/]+)(?:\/(.+))?$/);
       if (!match) return null;
 
       const [, pkgName, subPath] = match;
-      const pkgDir = resolve(__dirname, 'packages', pkgName);
+      const pkgDir = path.resolve(__dirname, 'packages', pkgName);
 
       try {
-        // Read package.json to get exports
-        const pkgJsonPath = resolve(pkgDir, 'package.json');
+        const pkgJsonPath = path.resolve(pkgDir, 'package.json');
         const pkgJson = JSON.parse(await fs.promises.readFile(pkgJsonPath, 'utf-8'));
 
-        // Resolve the export
         const exportPath = subPath ? `./${subPath}` : '.';
         const resolvedExport = pkgJson.exports?.[exportPath];
 
         if (resolvedExport) {
-          const fullPath = resolve(pkgDir, resolvedExport);
+          const fullPath = path.resolve(pkgDir, resolvedExport);
           workspacePackages.set(source, fullPath);
           return fullPath;
         }
@@ -70,24 +67,100 @@ function resolveWorkspacePackages(): Plugin {
   };
 }
 
-import * as fs from 'node:fs';
+const resolveCommandExecutable = (cmd: string) => {
+  const pathValue = process.env.PATH;
+  if (!pathValue) return;
+
+  if (process.platform === 'win32') {
+    const pathExt = (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD')
+      .split(';')
+      .filter(Boolean)
+      .map((ext) => ext.toLowerCase());
+    const candidateNames = cmd.includes('.') ? [cmd] : pathExt.map((ext) => `${cmd}${ext}`);
+
+    for (const entry of pathValue.split(path.delimiter).filter(Boolean)) {
+      for (const candidate of candidateNames) {
+        const resolved = path.win32.join(entry, candidate);
+        if (fs.existsSync(resolved)) return resolved;
+      }
+    }
+
+    return;
+  }
+
+  for (const entry of pathValue.split(path.delimiter).filter(Boolean)) {
+    const resolved = path.join(entry, cmd);
+    if (fs.existsSync(resolved)) return resolved;
+  }
+};
+
+const openExternalBrowser = async (
+  url: string,
+  logger?: { warn: (msg: string) => void },
+): Promise<boolean> => {
+  const command =
+    process.platform === 'win32'
+      ? {
+          args: ['url.dll,FileProtocolHandler', url],
+          cmd: 'rundll32',
+        }
+      : {
+          args: [url],
+          cmd: process.platform === 'darwin' ? 'open' : 'xdg-open',
+        };
+
+  const executable = resolveCommandExecutable(command.cmd);
+  if (!executable) {
+    logger?.warn(`openExternalBrowser: ${command.cmd} not found on PATH`);
+    return false;
+  }
+
+  return new Promise<boolean>((resolve) => {
+    try {
+      const child = spawn(executable, command.args, {
+        detached: true,
+        stdio: 'ignore',
+      });
+      let settled = false;
+      const done = (ok: boolean, reason?: string) => {
+        if (settled) return;
+        settled = true;
+        if (!ok && reason) logger?.warn(`openExternalBrowser: ${reason}`);
+        resolve(ok);
+      };
+      child.once('error', (err) => done(false, (err as Error).message));
+      child.once('spawn', () => {
+        child.unref();
+        done(true);
+      });
+      setTimeout(() => done(true), 200);
+    } catch (e) {
+      logger?.warn(`openExternalBrowser: ${(e as Error).message}`);
+      resolve(false);
+    }
+  });
+};
 
 export default defineConfig({
   base: isDev ? '/' : process.env.VITE_CDN_BASE || '/_spa/',
-  resolve: {
-    alias: {
-      '@/': resolve(__dirname, './src/'),
-    },
-  },
   build: {
     outDir: isMobile ? 'dist/mobile' : 'dist/desktop',
     reportCompressedSize: false,
-    rollupOptions: {
-      input: resolve(__dirname, isMobile ? 'index.mobile.html' : 'index.html'),
-      output: sharedRollupOutput,
+    rolldownOptions: {
+      input: path.resolve(__dirname, isMobile ? 'index.mobile.html' : 'index.html'),
+      output: createSharedRolldownOutput({ strictExecutionOrder: true }),
     },
   },
   define: sharedRendererDefine({ isMobile, isElectron: false }),
+  experimental: {
+    bundledDev: true,
+  },
+  resolve: {
+    alias: {
+      '@/': path.resolve(__dirname, './src/'),
+    },
+    tsconfigPaths: true,
+  },
   optimizeDeps: sharedOptimizeDeps,
   plugins: [
     resolveWorkspacePackages(),
@@ -105,15 +178,110 @@ export default defineConfig({
           cyan: (s: string) => `\x1B[36m${s}\x1B[0m`,
         };
         const { info } = server.config.logger;
+        const isBundledDev = (server.config.experimental as any)?.bundledDev;
+
+        const getProxyUrl = () => {
+          const urls = server.resolvedUrls;
+          if (!urls?.local?.[0]) return;
+          const localHost = urls.local[0].replace(/\/$/, '');
+          return `${ONLINE_HOST}/_dangerous_local_dev_proxy?debug-host=${encodeURIComponent(localHost)}`;
+        };
+        const printProxyUrl = () => {
+          const proxyUrl = getProxyUrl();
+          if (!proxyUrl) return;
+          const colorUrl = (url: string) =>
+            c.cyan(url.replace(/:(\d+)\//, (_, port) => `:${c.bold(port)}/`));
+          info(`  ${c.green('➜')}  ${c.bold('Debug Proxy')}: ${colorUrl(proxyUrl)}`);
+        };
+        const openProxyUrl = async () => {
+          const proxyUrl = getProxyUrl();
+          if (!proxyUrl) return;
+
+          const opened = await openExternalBrowser(proxyUrl, server.config.logger);
+
+          if (!opened) {
+            server.config.logger.warn(`Failed to open Debug Proxy automatically: ${proxyUrl}`);
+          }
+        };
+
+        if (isBundledDev) {
+          // Disable Vite's built-in browser opening. We always open the debug
+          // proxy URL after the first bundled compile finishes instead.
+          server.openBrowser = () => {};
+
+          const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+          let spinnerIdx = 0;
+          let spinnerTimer: NodeJS.Timeout | null = null;
+          const formatElapsed = (ms: number) =>
+            ms < 1000 ? `${Math.max(0, Math.round(ms))}ms` : `${(ms / 1000).toFixed(1)}s`;
+
+          const startSpinner = (msg: string, since: number) => {
+            spinnerIdx = 0;
+            spinnerTimer = setInterval(() => {
+              const elapsed = formatElapsed(Date.now() - since);
+              process.stdout.write(`\r${c.cyan(spinnerFrames[spinnerIdx])} ${msg} (${elapsed})`);
+              spinnerIdx = (spinnerIdx + 1) % spinnerFrames.length;
+            }, 80);
+          };
+          const stopSpinner = (clearLine = true) => {
+            if (spinnerTimer) {
+              clearInterval(spinnerTimer);
+              spinnerTimer = null;
+            }
+            if (clearLine) process.stdout.write('\r\x1B[K');
+          };
+
+          server.httpServer?.once('listening', () => {
+            void (async () => {
+              const rootUrl =
+                server.resolvedUrls?.local?.[0] ||
+                `http://localhost:${String(server.config.server.port || 9876)}/`;
+              const startedAt = Date.now();
+              const timeout = 180_000;
+              const interval = 400;
+              let ready = false;
+
+              startSpinner('Vite: compile and bundle...', startedAt);
+
+              try {
+                while (Date.now() - startedAt < timeout) {
+                  try {
+                    const res = await fetch(rootUrl, { signal: AbortSignal.timeout(5_000) });
+                    const text = await res.text();
+                    if (text.includes('Bundling in progress')) {
+                      await new Promise((r) => setTimeout(r, interval));
+                      continue;
+                    }
+                    ready = true;
+                    stopSpinner();
+                    info(
+                      `  ${c.green('✅')}  Vite: compile and bundle finished (${res.status}) ${rootUrl}`,
+                    );
+                    void openProxyUrl();
+                    break;
+                  } catch {
+                    await new Promise((r) => setTimeout(r, interval));
+                  }
+                }
+              } catch (e) {
+                stopSpinner();
+                console.warn('⚠️ Vite: could not wait for compile and bundle:', e);
+              }
+
+              if (!ready && spinnerTimer) {
+                stopSpinner();
+                console.warn(`⚠️ Vite: compile and bundle timed out after ${timeout / 1000}s`);
+              }
+
+              printProxyUrl();
+            })();
+          });
+        }
+
         return () => {
           server.printUrls = () => {
-            const urls = server.resolvedUrls;
-            if (!urls?.local?.[0]) return;
-            const localHost = urls.local[0].replace(/\/$/, '');
-            const proxyUrl = `${ONLINE_HOST}/_dangerous_local_dev_proxy?debug-host=${encodeURIComponent(localHost)}`;
-            const colorUrl = (url: string) =>
-              c.cyan(url.replace(/:(\d+)\//, (_, port) => `:${c.bold(port)}/`));
-            info(`  ${c.green('➜')}  ${c.bold('Debug Proxy')}: ${colorUrl(proxyUrl)}`);
+            if (isBundledDev) return;
+            printProxyUrl();
           };
         };
       },
@@ -148,25 +316,25 @@ export default defineConfig({
     //           cacheName: 'image-assets',
     //           expiration: { maxAgeSeconds: 60 * 60 * 24 * 30, maxEntries: 100 },
     //         },
- //         urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|ico|avif)$/i,
- //       },
- //       {
- //         handler: 'NetworkFirst',
- //         options: {
- //           cacheName: 'api-cache',
- //           expiration: { maxAgeSeconds: 60 * 5, maxEntries: 50 },
- //         },
- //         urlPattern: /\/(api|trpc)\/.*/i,
- //       },
- //     ],
- //   },
- // }),
+    //         urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|ico|avif)$/i,
+    //       },
+    //       {
+    //         handler: 'NetworkFirst',
+    //         options: {
+    //           cacheName: 'api-cache',
+    //           expiration: { maxAgeSeconds: 60 * 5, maxEntries: 50 },
+    //         },
+    //         urlPattern: /\/(api|trpc)\/.*/i,
+    //       },
+    //     ],
+    //   },
+    // }),
   ].filter(Boolean) as PluginOption[],
 
   server: {
     cors: true,
-    port: 9876,
     host: true,
+    port: 9876,
     proxy: {
       '/api': `http://localhost:${process.env.PORT || 3010}`,
       '/oidc': `http://localhost:${process.env.PORT || 3010}`,
