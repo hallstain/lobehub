@@ -43,6 +43,8 @@ export interface FieldSchema {
   devOnly?: boolean;
   /** Enum options for select fields */
   enum?: string[];
+  /** Per-option help text rendered alongside each enum option (1:1 with `enum`). */
+  enumDescriptions?: string[];
   /** Display labels for enum options */
   enumLabels?: string[];
   /** Array item schema */
@@ -57,6 +59,12 @@ export interface FieldSchema {
   /** Nested fields (for type: 'object') */
   properties?: FieldSchema[];
   required?: boolean;
+  /**
+   * i18n key for an extra `?` tooltip rendered next to the field label. Use
+   * for "how to find this value" guidance that's too long for the inline
+   * `description` (e.g. platform-specific UI paths for fetching User IDs).
+   */
+  tooltip?: string;
   /**
    * Field type, maps to UI component:
    * - 'string' → Input
@@ -213,6 +221,26 @@ export interface PlatformClient {
 
   readonly id: string;
 
+  /**
+   * Optional hook called from the router when a non-DM message wakes the
+   * bot via a watch-keyword match (LOBE-8891). Platforms that prefer to
+   * isolate the reply in a sub-thread (Discord, where the chat-sdk
+   * auto-creates a thread only on @-mention) should spawn one off the
+   * triggering message and return the upgraded composite threadId so the
+   * downstream `bridge.handleMention` posts inside the new thread.
+   *
+   * Return `undefined` (or omit the method) to leave the threadId
+   * unchanged — the bot then replies in the original channel, which is
+   * the right behaviour for threadless platforms (Telegram / WeChat / QQ)
+   * and for Slack / Lark / Feishu where channel-level replies are the
+   * conventional response shape.
+   *
+   * Implementations must be best-effort: any platform error should be
+   * caught and `undefined` returned so the router falls back to the
+   * original threadId rather than swallowing the user message.
+   */
+  openThreadForChannelWake?: (threadId: string, messageRaw: unknown) => Promise<string | undefined>;
+
   /** Parse a composite message ID into the platform-native format. */
   parseMessageId: (compositeId: string) => string | number;
 
@@ -222,7 +250,21 @@ export interface PlatformClient {
    * Optional — platforms that don't support command menus can omit this.
    */
   registerBotCommands?: (
-    commands: Array<{ command: string; description: string }>,
+    commands: Array<{
+      command: string;
+      description: string;
+      /**
+       * Argument schema for platforms with structured slash commands
+       * (Discord, Slack). Without this, Discord registers as zero-arg and
+       * users have no UI to pass a value — adapters that don't support
+       * options should silently ignore this field.
+       */
+      options?: Array<{
+        description: string;
+        name: string;
+        required?: boolean;
+      }>;
+    }>,
   ) => Promise<void>;
 
   /**

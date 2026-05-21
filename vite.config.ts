@@ -153,7 +153,7 @@ export default defineConfig({
   },
   define: sharedRendererDefine({ isMobile, isElectron: false }),
   experimental: {
-    bundledDev: true,
+    bundledDev: false,
   },
   resolve: {
     alias: {
